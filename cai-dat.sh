@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cài bộ plugin của Công cho Claude Code.
 #   bash cai-dat.sh            # cài tất cả
-#   bash cai-dat.sh --chi-mod  # chỉ cài 2 mod tự làm (cache-keeper, viet-hoa)
+#   bash cai-dat.sh --chi-mod  # chỉ cài mod cache-keeper và bật You should know
 set -u
 
 CHI_MOD=0
@@ -16,12 +16,14 @@ chay() {  # chạy một lệnh, ghi lại nếu lỗi nhưng không dừng cả
   "$@" || LOI+=("$*")
 }
 
-# 1. Hai mod tự làm, lấy thẳng từ GitHub (tự cập nhật khi repo đổi)
+# 1. Mod tự làm, lấy thẳng từ GitHub (tự cập nhật khi repo đổi)
 chay claude plugin marketplace add Hactory/cong-mods
 chay claude plugin install cache-keeper@cong-mods --scope user
-chay claude plugin install viet-hoa@cong-mods --scope user
 
-# 2. Plugin công khai từ GitHub
+# 2. You should know: có sẵn trong Claude Code nhưng tắt mặc định
+chay claude plugin enable cc-plugin-you-should-know@builtin
+
+# 3. Plugin công khai từ GitHub
 if [ "$CHI_MOD" = 0 ]; then
   for repo in \
     anthropics/claude-plugins-official \

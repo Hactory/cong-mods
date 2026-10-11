@@ -1,6 +1,0 @@
-{
-  "name": "viet-hoa",
-  "version": "0.1.0",
-  "description": "Việt hoá các dòng trạng thái của Claude Code: dòng đang làm, dòng gợi ý, nhãn chế độ, hàng công cụ",
-  "author": { "name": "Công" }
-}

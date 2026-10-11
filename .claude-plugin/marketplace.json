@@ -1,0 +1,8 @@
+{
+  "name": "cong-mods",
+  "owner": { "name": "Công" },
+  "plugins": [
+    { "name": "cache-keeper", "source": "./plugins/cache-keeper" },
+    { "name": "viet-hoa", "source": "./plugins/viet-hoa" }
+  ]
+}

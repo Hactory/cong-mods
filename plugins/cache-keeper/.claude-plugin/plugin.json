@@ -1,6 +1,6 @@
 {
   "name": "cache-keeper",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Thanh gọn trên ô nhập: đếm ngược cache, context, quota 5h/tuần kèm giờ reset, chi phí phiên, gợi ý bước tiếp và nút handoff",
   "types": "./types/index.d.ts",
   "author": {

@@ -542,46 +542,64 @@ export const register: Register = on => {
             )}
           </Box>
         </Box>
-        {working !== null && <Text dimColor>{working}</Text>}
-        {list.length > 0 && working === null && (
-          <Box flexDirection="column">
-            <Text dimColor>tiếp theo:</Text>
-            {list.map((t, i) => (
-              <Button
-                key={`step-${i}`}
-                label={t}
-                hotkey={String(i + 1)}
-                plain
-                onPress={async () => {
-                  await $.prompt.fill({ text: t, mode: 'replace' })
-                  await update($, steps, () => [])
-                }}
-              />
-            ))}
-            <Button key="dismiss" label="bỏ qua" hotkey="0" plain onPress={() => update($, steps, () => [])} />
-          </Box>
-        )}
-        <Box flexDirection="row" gap={3} justifyContent="flex-end">
-          <Button
-            key="progress"
-            label={progLabel(pg.done, pg.total, pg.running)}
-            hotkey="t"
-            plain
-            onPress={() => void openProgress($)}
-          />
-          <Button
-            key="copy-id"
-            label="copy ID"
-            hotkey="c"
-            plain
-            onPress={async () => {
-              const id = await $.session.id()
-              const r = await $.ui.copy({ text: id, surface })
-              $.ui.toast(r.isCopied ? `Đã copy session ID: ${id}` : `Không copy được (${r.reason}). ID: ${id}`)
-            }}
-          />
-          <Button key="handoff" label="handoff" hotkey="h" plain onPress={handoff} />
-        </Box>
+        {(() => {
+          const buttons = [
+            <Button
+              key="progress"
+              label={progLabel(pg.done, pg.total, pg.running)}
+              hotkey="t"
+              plain
+              onPress={() => void openProgress($)}
+            />,
+            <Button
+              key="copy-id"
+              label="copy ID"
+              hotkey="c"
+              plain
+              onPress={async () => {
+                const id = await $.session.id()
+                const r = await $.ui.copy({ text: id, surface })
+                $.ui.toast(r.isCopied ? `Đã copy session ID: ${id}` : `Không copy được (${r.reason}). ID: ${id}`)
+              }}
+            />,
+            <Button key="handoff" label="handoff" hotkey="h" plain onPress={handoff} />,
+          ]
+          const left =
+            working !== null ? (
+              <Text dimColor>{working}</Text>
+            ) : list.length > 0 ? (
+              [
+                ...list.map((t, i) => (
+                  <Button
+                    key={`step-${i}`}
+                    label={t}
+                    hotkey={String(i + 1)}
+                    plain
+                    onPress={async () => {
+                      await $.prompt.fill({ text: t, mode: 'replace' })
+                      await update($, steps, () => [])
+                    }}
+                  />
+                )),
+                <Button key="dismiss" label="bỏ qua" hotkey="0" plain onPress={() => update($, steps, () => [])} />,
+              ]
+            ) : null
+          // Có gợi ý: nút xếp cột dọc bên phải, cạnh danh sách. Không có: một hàng sát phải.
+          return left === null ? (
+            <Box flexDirection="row" gap={3} justifyContent="flex-end">
+              {buttons}
+            </Box>
+          ) : (
+            <Box flexDirection="row" gap={2}>
+              <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+                {left}
+              </Box>
+              <Box flexDirection="column" flexShrink={0}>
+                {buttons}
+              </Box>
+            </Box>
+          )
+        })()}
       </Box>
     )
   })

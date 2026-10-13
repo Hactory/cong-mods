@@ -95,3 +95,41 @@ export function parseAiSum(text: string): AiSumBody | null {
   const doing = typeof o.doing === 'string' && o.doing.trim() ? o.doing.trim() : null
   return { goal, done: strs(o.done), doing, next: strs(o.next) }
 }
+
+export const NOTE_KINDS = ['decide', 'risk', 'todo', 'unverified', 'changed'] as const
+export type NoteKindLib = (typeof NOTE_KINDS)[number]
+
+export const NOTE_LABEL: Record<NoteKindLib, string> = {
+  decide: 'cần anh quyết',
+  risk: 'rủi ro',
+  todo: 'còn treo',
+  unverified: 'chưa kiểm chứng',
+  changed: 'Claude tự đổi',
+}
+
+/** Bóc danh sách lưu ý từ câu trả lời JSON của Haiku; sai định dạng thì null. */
+export function parseNotes(text: string): { kind: NoteKindLib; text: string; why: string }[] | null {
+  const m = text.match(/\{[\s\S]*\}/)
+  if (!m) return null
+  let raw: unknown
+  try {
+    raw = JSON.parse(m[0])
+  } catch {
+    return null
+  }
+  if (typeof raw !== 'object' || raw === null) return null
+  const items = (raw as Record<string, unknown>).items
+  if (!Array.isArray(items)) return null
+  const order = (k: NoteKindLib) => NOTE_KINDS.indexOf(k)
+  return items
+    .flatMap(it => {
+      if (typeof it !== 'object' || it === null) return []
+      const o = it as Record<string, unknown>
+      const kind = NOTE_KINDS.find(k => k === o.kind) ?? 'risk'
+      const t = typeof o.text === 'string' ? o.text.trim() : ''
+      const why = typeof o.why === 'string' ? o.why.trim() : ''
+      return t ? [{ kind, text: t, why }] : []
+    })
+    .sort((a, b) => order(a.kind) - order(b.kind))
+    .slice(0, 12)
+}

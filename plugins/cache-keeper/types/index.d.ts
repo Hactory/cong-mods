@@ -33,6 +33,11 @@ export type Prog = {
 /** Bản tóm tắt tiến độ Haiku soạn từ transcript khi phiên không có danh sách việc. */
 export type AiSum = { goal: string; done: string[]; doing: string | null; next: string[]; at: number }
 
+/** Một lưu ý Haiku rút ra từ cả phiên: điều người dùng dễ bỏ sót. */
+export type NoteKind = 'risk' | 'decide' | 'todo' | 'unverified' | 'changed'
+export type Note = { kind: NoteKind; text: string; why: string }
+export type Notes = { items: Note[]; at: number }
+
 declare module 'claude-code' {
   interface PluginState {
     'cache-keeper': {
@@ -44,6 +49,8 @@ declare module 'claude-code' {
       prog: Prog
       aiSum: AiSum | null
       aiBusy: boolean
+      notes: Notes | null
+      notesBusy: boolean
     }
   }
 }

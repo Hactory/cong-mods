@@ -8,6 +8,7 @@ const BAND = {
 
 test('thanh hiện cache, quota kèm reset, gợi ý bấm được', async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
   on('session.measure', (_$, e) => ({ changed: e.changed }))
   on('turn.complete', (_$, e) => ({ text: e.answer }))
   on('model.complete', () => ({ value: {

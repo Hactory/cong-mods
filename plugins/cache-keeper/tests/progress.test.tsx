@@ -31,7 +31,8 @@ test('bảng tiến độ đếm việc và subagent', async ($, on) => {
   }
 })
 
-test('thanh có nút tiến độ và copy ID', async $ => {
+test('thanh có nút tiến độ và copy ID', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
   const ui = await $.ui.mount({
     plugin: 'cache-keeper',
     surface: 'desktop',

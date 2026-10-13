@@ -1,8 +1,10 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, Register, SessionMeasureInput, SessionUsage } from 'claude-code'
 
-import type { AiSum, Prog, ProgAgent, ProgTask, Snap, TaskStatus } from '../types'
+import type { AiSum, Notes, Prog, ProgAgent, ProgTask, Snap, TaskStatus } from '../types'
 import {
+  NOTE_LABEL,
+  parseNotes,
   COLD_WARN_MS,
   cacheColor,
   cacheLeft,
@@ -108,6 +110,7 @@ function summarize(p: Prog) {
 
 async function progressStart($: EngineInterface) {
   await $.command.register({ name: 'tien-do', description: 'Mở bảng tiến độ của phiên bên cạnh' })
+  await $.command.register({ name: 'luu-y', description: 'Mở bảng những lưu ý có thể đã bị bỏ sót trong phiên' })
 }
 
 let lastAsk = ''
@@ -372,6 +375,124 @@ function registerProgress(on: On) {
   })
 }
 
+// ---- Bảng "Lưu ý": những điều dễ bị bỏ sót trong cả phiên ----
+
+const NOTES_PANE = 'luu-y'
+const NOTES_TITLE = 'Lưu ý'
+
+const notes = atom({ plugin: 'cache-keeper', key: 'notes' } as const, null as Notes | null)
+const notesBusy = atom({ plugin: 'cache-keeper', key: 'notesBusy' } as const, false)
+
+const NOTES_PROMPT = (log: string) => `Dưới đây là nhật ký một phiên làm việc dài với Claude Code (U: người dùng, A: Claude, [tool] là công cụ đã gọi).
+Người dùng là chủ sản phẩm, không phải lập trình viên. Câu trả lời dài và liên tục nên họ hay bỏ sót những ý quan trọng nằm lẫn giữa chừng.
+<log>
+${log}
+</log>
+
+Liệt kê những LƯU Ý người dùng có thể đã bỏ sót, trong CẢ phiên chứ không chỉ cuối phiên:
+- decide: Claude đã hỏi hoặc chờ người dùng quyết mà chưa thấy trả lời
+- risk: rủi ro, cảnh báo, tác dụng phụ Claude đã nhắc qua
+- todo: việc Claude nói sẽ làm, "làm sau", "chưa làm", hoặc bước người dùng phải tự làm mà chưa thấy làm
+- unverified: kết quả Claude nói là chưa kiểm chứng, chỉ test giả lập, hoặc giả định
+- changed: Claude tự đổi hướng, đổi cấu hình, hoặc chọn thay người dùng mà không nói rõ
+Bỏ qua việc đã được xử lý xong ở đoạn sau của nhật ký. Không bịa: chỉ ghi điều có trong nhật ký.
+
+Trả đúng một khối JSON, không viết gì khác:
+{"items": [{"kind": "decide|risk|todo|unverified|changed", "text": "lưu ý, một câu dưới 110 ký tự", "why": "vì sao đáng để ý, dưới 110 ký tự"}]}
+Tiếng Việt có dấu, viết đời thường, tối đa 10 mục, mục quan trọng trước. Không có gì thì {"items": []}.`
+
+async function collectNotes($: EngineInterface) {
+  if (await read($, notesBusy)) return
+  await update($, notesBusy, () => true)
+  try {
+    const msgs = await $.session.messages()
+    if ('deny' in msgs) return
+    const log = msgs
+      .map(m => {
+        const tools = m.toolUses.length ? ` [${m.toolUses.map(t => t.tool).join(', ')}]` : ''
+        const cap = m.role === 'user' ? 500 : 900
+        return `${m.role === 'user' ? 'U' : 'A'}: ${m.text.replace(/\s+/g, ' ').slice(0, cap)}${tools}`
+      })
+      .filter(l => l.length > 4)
+      .join('\n')
+      .slice(-80000)
+    if (!log) {
+      $.ui.toast('Phiên chưa có nội dung để rút lưu ý')
+      return
+    }
+    const ask = (model: string) =>
+      $.model.complete({ model, prompt: NOTES_PROMPT(log), maxTokens: 1500, timeoutMs: 90_000 })
+    let r = await ask('claude-haiku-5-5').catch(() => ask('haiku'))
+    if (!r.isAnswered && r.reason === 'api-error') r = await ask('haiku')
+    const items = r.isAnswered ? parseNotes(r.text) : null
+    if (!items) {
+      $.ui.toast(r.isAnswered ? 'Haiku trả lời sai định dạng, bấm rút lại' : `Haiku không trả lời: ${r.reason}`)
+      return
+    }
+    const at = await $.clock.now()
+    await update($, notes, () => ({ items, at }))
+  } finally {
+    await update($, notesBusy, () => false)
+  }
+}
+
+/** Mở bảng lưu ý; chưa có hoặc đã có lượt mới từ lần rút trước thì nhờ Haiku rút lại. */
+async function openNotes($: EngineInterface) {
+  await $.ui.open({ id: NOTES_PANE, title: NOTES_TITLE })
+  const n = await read($, notes)
+  const at = await read($, lastAt)
+  if (n === null || (at !== null && at > n.at)) $.clock.after(0, () => void collectNotes($))
+}
+
+function registerNotes(on: On) {
+  on('command.run', { command: 'luu-y' }, async $ => {
+    await openNotes($)
+    return { text: 'Đã mở bảng lưu ý.' }
+  })
+
+  on('ui.render', { component: 'Pane', requestId: NOTES_PANE }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const n = await read($, notes)
+    const isBusy = await read($, notesBusy)
+    const now = await read($, tick)
+    const tone = (k: string) => (k === 'decide' || k === 'risk' ? 'warning' : k === 'unverified' ? 'error' : 'inactive')
+
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Text dimColor wrap="wrap">
+          Những điều có thể anh đã bỏ sót trong cả phiên, do Haiku rút từ cuộc chat.
+        </Text>
+        {n === null ? (
+          <Text>{isBusy ? 'Đang nhờ Haiku đọc lại cả phiên…' : 'Chưa có, bấm "rút lại".'}</Text>
+        ) : n.items.length === 0 ? (
+          <Text color="success">Không thấy lưu ý nào bị bỏ sót.</Text>
+        ) : (
+          n.items.map((it, i) => (
+            <Box key={`n-${i}`} flexDirection="column">
+              <Text wrap="wrap">
+                <Text color={tone(it.kind)} bold>[{NOTE_LABEL[it.kind]}]</Text> {it.text}
+              </Text>
+              {it.why !== '' && <Text dimColor wrap="wrap">  {it.why}</Text>}
+              <Button
+                key={`ask-${i}`}
+                label="hỏi Claude về ý này"
+                plain
+                onPress={() => $.prompt.fill({ text: `Nói rõ giúp tôi lưu ý này và đề xuất cách xử lý: ${it.text}`, mode: 'replace' })}
+              />
+            </Box>
+          ))
+        )}
+        {n !== null && (
+          <Text dimColor>
+            Rút {fmtDur(Math.max(0, now - n.at))} trước{isBusy ? ' · đang rút lại…' : ''}
+          </Text>
+        )}
+        <Button key="notes-refresh" label={isBusy ? 'đang rút…' : 'rút lại'} plain onPress={() => void collectNotes($)} />
+      </Box>
+    )
+  })
+}
+
 // ---- Thanh trên ô nhập ----
 
 const STEPS_PROMPT = (ask: string, answer: string) => `Bạn gợi ý bước tiếp theo cho một phiên lập trình với Claude Code.
@@ -401,6 +522,7 @@ function toSnap(u: Pick<SessionUsage, 'context' | 'rateLimits' | 'cost'> | Sessi
 
 export const register: Register = on => {
   registerProgress(on)
+  registerNotes(on)
   let lastAsk = ''
   let warnedFor: number | null = null
 
@@ -465,6 +587,11 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
 
+    // Plugin bên dưới (vd. You should know) có thẻ cần hiện thì nhường chỗ cho thẻ đó,
+    // thay cho danh sách gợi ý (cùng dùng phím 1, 2, 0). Phần engine tự vẽ thì bỏ qua.
+    const below = await next(e)
+    const belowCard = 'type' in below && below.type === 'engine' ? null : below
+
     const { Box, Button, Text } = $.ui.resolve(e)
     const surface = e.surface
     const now = await read($, tick)
@@ -473,6 +600,7 @@ export const register: Register = on => {
     const list = await read($, steps)
     const working = await read($, busy)
     const pg = summarize(await read($, prog))
+    const noteCount = (await read($, notes))?.items.length ?? 0
 
     const left = cacheLeft(at, now)
     const cacheText = e.props.isWorking
@@ -552,6 +680,13 @@ export const register: Register = on => {
               onPress={() => void openProgress($)}
             />,
             <Button
+              key="notes"
+              label={noteCount > 0 ? `lưu ý (${noteCount})` : 'lưu ý'}
+              hotkey="l"
+              plain
+              onPress={() => void openNotes($)}
+            />,
+            <Button
               key="copy-id"
               label="copy ID"
               hotkey="c"
@@ -565,7 +700,9 @@ export const register: Register = on => {
             <Button key="handoff" label="handoff" hotkey="h" plain onPress={handoff} />,
           ]
           const left =
-            working !== null ? (
+            belowCard !== null ? (
+              belowCard
+            ) : working !== null ? (
               <Text dimColor>{working}</Text>
             ) : list.length > 0 ? (
               [

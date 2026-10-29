@@ -15,6 +15,7 @@ import {
   parseAiSum,
   parseSteps,
   pctColor,
+  ctxPct,
   progLabel,
 } from './lib'
 
@@ -512,7 +513,7 @@ function toSnap(u: Pick<SessionUsage, 'context' | 'rateLimits' | 'cost'> | Sessi
   const order = (k: string) => (k === 'five_hour' ? 0 : k === 'seven_day' ? 1 : 2)
   return {
     ctxTokens: u.context.tokens ?? null,
-    ctxPercent: u.context.percent ?? null,
+    ctxPercent: u.context.tokens != null ? ctxPct(u.context.tokens) : (u.context.percent ?? null),
     costUsd: u.cost?.usd ?? null,
     limits: [...u.rateLimits]
       .sort((a, b) => order(a.kind) - order(b.kind))

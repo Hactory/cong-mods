@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { cacheColor, parseAiSum, pctColor, cacheLeft, fmtDur, fmtTok, limitLabel, parseSteps } from '../hooks/lib'
+import { cacheColor, ctxPct, CTX_MOC, parseAiSum, pctColor, cacheLeft, fmtDur, fmtTok, limitLabel, parseSteps } from '../hooks/lib'
 
 describe('định dạng', () => {
   test('đếm ngược', async () => {
@@ -41,5 +41,15 @@ describe('định dạng', () => {
       'Mở PR',
       'Gộp nhánh vào main',
     ])
+  })
+})
+
+describe('ctxPct', () => {
+  test('tính % theo mốc tóm tắt 600k, không theo trần 1M', () => {
+    expect(CTX_MOC).toBe(600_000)
+    expect(ctxPct(585_000)).toBe(98)
+    expect(ctxPct(300_000)).toBe(50)
+    expect(ctxPct(0)).toBe(0)
+    expect(ctxPct(660_000)).toBe(110)
   })
 })

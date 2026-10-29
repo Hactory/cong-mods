@@ -2,6 +2,14 @@
 
 export const CACHE_TTL_MS = 60 * 60 * 1000 // cache prompt 1 giờ của gói subscription
 export const COLD_WARN_MS = 5 * 60 * 1000 // báo khi còn 5 phút
+// Mốc % ngữ cảnh = ngưỡng tự tóm tắt `autoCompactWindow` trong ~/.claude/settings.json (Công chốt 600k, 14/10/2026).
+// 100% nghĩa là phiên sắp tự tóm tắt; đổi setting thì đổi số này theo.
+export const CTX_MOC = 600_000
+
+/** % ngữ cảnh theo mốc tóm tắt, làm tròn; có thể vượt 100 khi phiên chưa kịp tóm tắt. */
+export function ctxPct(tokens: number, moc: number = CTX_MOC): number {
+  return Math.round((tokens / moc) * 100)
+}
 
 /** 3n4h, 2h14m, 57m, 40s */
 export function fmtDur(ms: number): string {

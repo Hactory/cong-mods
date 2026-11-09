@@ -38,6 +38,9 @@ export type NoteKind = 'risk' | 'decide' | 'todo' | 'unverified' | 'changed'
 export type Note = { kind: NoteKind; text: string; why: string }
 export type Notes = { items: Note[]; at: number }
 
+/** Bản handoff vừa soạn: chữ để dán sang phiên mới và file lưu. */
+export type Handoff = { text: string; file: string; at: number }
+
 declare module 'claude-code' {
   interface PluginState {
     'cache-keeper': {
@@ -51,6 +54,8 @@ declare module 'claude-code' {
       aiBusy: boolean
       notes: Notes | null
       notesBusy: boolean
+      handoff: Handoff | null
+      handoffOpen: boolean
     }
   }
 }

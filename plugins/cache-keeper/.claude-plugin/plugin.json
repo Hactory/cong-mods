@@ -1,9 +1,1 @@
-{
-  "name": "cache-keeper",
-  "version": "0.5.1",
-  "description": "Thanh gọn trên ô nhập: đếm ngược cache, context, quota 5h/tuần kèm giờ reset, chi phí phiên, gợi ý bước tiếp và nút handoff",
-  "types": "./types/index.d.ts",
-  "author": {
-    "name": "Công"
-  }
-}
+{"name": "cache-keeper", "version": "0.10.4", "description": "Band trên ô nhập: cache, chi phí phiên, vòng quota 5h/tuần kèm giờ reset, gợi ý, nút cột dọc, thẻ You Should Know đẹp; dưới ô nhập: thanh token màu", "types": "./types/index.d.ts"}

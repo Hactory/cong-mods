@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { cacheColor, ctxPct, CTX_MOC, parseAiSum, pctColor, cacheLeft, fmtDur, fmtTok, limitLabel, parseSteps } from '../hooks/lib'
+import { cacheLabel, compactLook, snapAfterCompact, ctxBarSvg, ctxFilled, ringGlyph, ringSvg, splitHeadline } from '../hooks/lib'
 
 describe('định dạng', () => {
   test('đếm ngược', async () => {
@@ -51,5 +52,59 @@ describe('ctxPct', () => {
     expect(ctxPct(300_000)).toBe(50)
     expect(ctxPct(0)).toBe(0)
     expect(ctxPct(660_000)).toBe(110)
+  })
+})
+
+describe('dòng dưới ô nhập và thẻ YSK', () => {
+  test('tách câu YSK thành tiêu đề + dòng phụ', async () => {
+    expect(splitHeadline('Làm lại cả video cần nạp thêm 65 credit. Seedance 2.5 720p cần khoảng 90 credit.')).toEqual({
+      headline: 'Làm lại cả video cần nạp thêm 65 credit',
+      detail: 'Seedance 2.5 720p cần khoảng 90 credit.',
+    })
+    // Câu một mạch: cắt ở dấu phẩy sau ít nhất 25 ký tự; 0,0026 không bị cắt.
+    const one = splitHeadline('Dù Haiku 5.5 đo ra tốt, muốn dùng thật vẫn phải viết thêm code, vì luận giải tarot hiện chỉ gọi model qua OpenRouter.')
+    expect(one.headline).toBe('Dù Haiku 5.5 đo ra tốt, muốn dùng thật vẫn phải viết thêm code')
+    expect(one.detail).toBe('Vì luận giải tarot hiện chỉ gọi model qua OpenRouter.')
+    expect(splitHeadline('Cổng tạm vẫn bật.')).toEqual({ headline: 'Cổng tạm vẫn bật', detail: '' })
+  })
+  test('thanh ngữ cảnh và vòng quota', async () => {
+    expect(ctxFilled(0)).toBe(0)
+    expect(ctxFilled(2)).toBe(1)
+    expect(ctxFilled(57)).toBe(6)
+    expect(ctxFilled(130)).toBe(10)
+    expect(ringGlyph(9)).toBe('○')
+    expect(ringGlyph(59)).toBe('◑')
+    expect(ringSvg(100)).toContain('100%</text>')
+    expect(ctxBarSvg(30).source).toContain('#22c55e')
+  })
+})
+
+describe('chữ trạng thái cache', () => {
+  test('ấm, đang chạy, nguội, chưa rõ', async () => {
+    expect(cacheLabel(56 * 60000, false)).toBe('Cache ấm 56m')
+    expect(cacheLabel(5 * 60000, true)).toBe('Cache ấm 1h00m')
+    expect(cacheLabel(0, false)).toBe('Cache nguội')
+    expect(cacheLabel(null, false)).toBe('Cache chưa rõ')
+  })
+})
+
+describe('nút Nén theo mức context', () => {
+  test('xanh mờ, vàng rõ, đỏ thêm chấm đỏ, đang nén thì báo', () => {
+    expect(compactLook(30, false)).toEqual({ label: 'Nén', dim: true })
+    expect(compactLook(65, false)).toEqual({ label: 'Nén', dim: false })
+    expect(compactLook(85, false)).toEqual({ label: '🔴 Nén', dim: false })
+    expect(compactLook(85, true)).toEqual({ label: 'Đang nén…', dim: false })
+  })
+})
+
+describe('số đo sau khi nén', () => {
+  test('thay cỡ context, giữ quota và chi phí', () => {
+    const before = { ctxTokens: 159_000, ctxPercent: 27, costUsd: 162.56, limits: [{ kind: 'five_hour', percentUsed: 6, resetsAt: null }] }
+    const after = snapAfterCompact(before, 21_000)
+    expect(after.ctxTokens).toBe(21_000)
+    expect(after.ctxPercent).toBe(ctxPct(21_000))
+    expect(after.costUsd).toBe(162.56)
+    expect(after.limits).toEqual(before.limits)
+    expect(snapAfterCompact(null, 21_000)).toEqual({ ctxTokens: 21_000, ctxPercent: ctxPct(21_000), costUsd: null, limits: [] })
   })
 })

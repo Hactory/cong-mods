@@ -1,23 +1,44 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, On, Register, SessionMeasureInput, SessionUsage } from 'claude-code'
+import type {
+  EngineInterface,
+  On,
+  Register,
+  RenderElement,
+  RenderSurface,
+  SessionMeasureInput,
+  SessionUsage,
+} from 'claude-code'
 
-import type { AiSum, Notes, Prog, ProgAgent, ProgTask, Snap, TaskStatus } from '../types'
+import type { AiSum, Handoff, Notes, Prog, ProgAgent, ProgTask, Snap, TaskStatus } from '../types'
 import {
   NOTE_LABEL,
   parseNotes,
   COLD_WARN_MS,
   cacheColor,
+  cacheLabel,
   cacheLeft,
+  compactLook,
+  snapAfterCompact,
+  ctxCells,
   fmtDur,
   fmtTok,
   bar,
   limitLabel,
   parseAiSum,
   parseSteps,
+  parseYsk,
   pctColor,
   ctxPct,
   progLabel,
+  ringGlyph,
+  ringSvg,
+  RING_SIZE,
+  FLAME_SVG,
+  splitHeadline,
+  textOf,
+  yskLabel,
 } from './lib'
+import type { YskCard } from './lib'
 
 const lastAt = atom({ plugin: 'cache-keeper', key: 'lastAt' } as const, null)
 const tick = atom({ plugin: 'cache-keeper', key: 'tick' } as const, 0)
@@ -199,7 +220,8 @@ function registerProgress(on: On) {
       desc: e.description,
       kind: e.subagent_type ?? 'general-purpose',
       model: e.model ?? null,
-      isBackground: e.run_in_background === true,
+      // Bản Claude Code mới bỏ trường này khỏi kiểu (subagent mặc định chạy nền); đọc lỏng để bản cũ vẫn đúng.
+      isBackground: pick(e, 'run_in_background') === true,
       startedAt: now,
       endedAt: null,
       isError: false,
@@ -509,6 +531,200 @@ const HANDOFF_PROMPT = `Viết bản HANDOFF để dán vào một phiên mới 
 Gồm các mục: Mục tiêu · Đã xong (kèm file, commit, PR) · Đang dở · Bước tiếp theo cụ thể · Quyết định và ràng buộc người dùng đã chốt · File, đường dẫn, lệnh quan trọng.
 Tiếng Việt có dấu, gạch đầu dòng, ngắn gọn, không lời mở đầu.`
 
+// ---- Handoff: soạn bản bàn giao, HIỆN ngay trên ô chat, copy sẵn, KHÔNG tự /clear ----
+// Bản cũ tự /clear rồi dán vào ô nhập: trên app desktop, /clear dựng phiên mới với ô nhập mới nên
+// chữ dán không tới, người dùng chỉ thấy phiên bị xoá (09/11). Giờ để người dùng tự /clear rồi dán.
+// Nút chỉ hẹn việc rồi trả lời ngay: app desktop báo "ui_press failed" khi nút chờ soạn lâu.
+
+const HANDOFF_PANE = 'handoff'
+const HANDOFF_TITLE = 'Handoff'
+const handoffDoc = atom({ plugin: 'cache-keeper', key: 'handoff' } as const, null as Handoff | null)
+const handoffOpen = atom({ plugin: 'cache-keeper', key: 'handoffOpen' } as const, false)
+const HANDOFF_BUSY = 'Đang soạn bản handoff…'
+
+const handoffDraft = (doc: Handoff) => `Tiếp tục công việc từ bản handoff dưới đây (bản lưu: ${doc.file}):\n\n${doc.text}`
+
+async function copyHandoff($: EngineInterface, doc: Handoff, surface: RenderSurface) {
+  const r = await $.ui.copy({ text: handoffDraft(doc), surface })
+  $.ui.toast(
+    r.isCopied
+      ? 'Đã copy bản handoff. Gõ /clear (hoặc mở phiên mới) rồi dán ⌘V'
+      : `Không copy được (${r.reason}). Nội dung đang hiện trên ô chat, bấm "dán vào ô nhập" hoặc chép tay`,
+  )
+}
+
+/** Hẹn soạn handoff ở nền để nút bấm trả lời ngay. */
+function startHandoff($: EngineInterface, surface: RenderSurface) {
+  $.clock.after(0, () => void makeHandoff($, surface))
+}
+
+/** Soạn bản handoff từ cả cuộc chat, lưu file, hiện trên ô chat, mở bảng và copy sẵn. Không đụng tới phiên. */
+async function makeHandoff($: EngineInterface, surface: RenderSurface) {
+  if ((await read($, busy)) === HANDOFF_BUSY) return
+  await update($, busy, () => HANDOFF_BUSY)
+  try {
+    const r = await $.model.fork({ prompt: HANDOFF_PROMPT })
+    if (!r.isAnswered) {
+      $.ui.toast(`Handoff không soạn được: ${r.reason}`)
+      return
+    }
+    const home = (await $.env.get('HOME')) ?? ''
+    const at = await $.clock.now()
+    const stamp = new Date(at).toISOString().slice(0, 16).replace(/[:T]/g, '-')
+    const file = `${home}/.claude/handoffs/${stamp}-${(await $.session.id()).slice(0, 8)}.md`
+    await $.fs.write(file, r.text)
+    const doc: Handoff = { text: r.text, file, at }
+    await update($, handoffDoc, () => doc)
+    await update($, handoffOpen, () => true)
+    await update($, busy, () => null)
+    await $.ui.open({ id: HANDOFF_PANE, title: HANDOFF_TITLE })
+    await copyHandoff($, doc, surface)
+  } catch (err) {
+    $.ui.toast(`Handoff lỗi: ${String(err instanceof Error ? err.message : err).slice(0, 120)}`)
+  } finally {
+    if ((await read($, busy)) === HANDOFF_BUSY) await update($, busy, () => null)
+  }
+}
+
+/**
+ * Các nút của bản handoff, dùng chung cho thẻ trên ô chat và bảng bên.
+ * Vẽ thành nút thật (không `plain`): Copy là nút chính, còn lại nút viền. App desktop chỉ vẽ chữ của
+ * nhãn (không nhận hình SVG trong nút) nên icon là emoji đứng đầu nhãn.
+ */
+function handoffActions(
+  $: EngineInterface,
+  ui: ReturnType<EngineInterface['ui']['resolve']>,
+  doc: Handoff,
+  surface: RenderSurface,
+  opts: { withClose: boolean; isBusy: boolean },
+) {
+  const { Button } = ui
+  return [
+    <Button key="handoff-copy" label="📋 Copy" variant="primary" onPress={() => void copyHandoff($, doc, surface)} />,
+    <Button
+      key="handoff-fill"
+      label="📥 Dán vào ô nhập"
+      variant="secondary"
+      onPress={() => $.prompt.fill({ text: handoffDraft(doc), mode: 'replace' })}
+    />,
+    <Button
+      key="handoff-redo"
+      label={opts.isBusy ? '⏳ Đang soạn…' : '🔄 Soạn lại'}
+      variant="secondary"
+      onPress={() => startHandoff($, surface)}
+    />,
+    ...(opts.withClose
+      ? [
+          <Button
+            key="handoff-close"
+            label="✖️ Đóng"
+            variant="secondary"
+            onPress={() => update($, handoffOpen, () => false)}
+          />,
+        ]
+      : []),
+  ]
+}
+
+function registerHandoff(on: On) {
+  on('ui.render', { component: 'Pane', requestId: HANDOFF_PANE }, async ($, e) => {
+    const ui = $.ui.resolve(e)
+    const { Box, Text, Button, Markdown } = ui
+    const doc = await read($, handoffDoc)
+    const isBusy = (await read($, busy)) === HANDOFF_BUSY
+    if (doc === null) {
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Text>{isBusy ? HANDOFF_BUSY : 'Chưa có bản handoff.'}</Text>
+          {!isBusy && <Button key="handoff-redo" label="📝 Soạn handoff" variant="primary" onPress={() => startHandoff($, e.surface)} />}
+        </Box>
+      )
+    }
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Text dimColor wrap="wrap">
+          {isBusy ? `${HANDOFF_BUSY} ` : ''}Muốn làm tiếp ở phiên sạch: gõ /clear (hoặc mở phiên mới) rồi dán ⌘V.
+        </Text>
+        <Box flexDirection="row" gap="sm" flexWrap="wrap">
+          {handoffActions($, ui, doc, e.surface, { withClose: false, isBusy })}
+        </Box>
+        <Text dimColor wrap="wrap">{doc.file}</Text>
+        <Markdown key="handoff-md" text={doc.text} />
+      </Box>
+    )
+  })
+}
+
+// ---- Nút "Nén" cạnh thanh context: chạy /compact; không chạy được thì để sẵn /compact trong ô chat ----
+
+const COMPACT_BUSY = 'Đang nén cuộc chat…'
+const COMPACT_FOCUS =
+  'Giữ đủ: mục tiêu, việc đã xong (file, commit, PR), việc đang dở, bước tiếp theo, quyết định và ràng buộc người dùng đã chốt.'
+
+/** Hẹn nén ở nền để nút bấm trả lời ngay (/compact chạy lâu, và chờ tới khi Claude rảnh). */
+function startCompact($: EngineInterface) {
+  $.clock.after(0, () => void compactNow($))
+}
+
+async function compactNow($: EngineInterface) {
+  if ((await read($, busy)) === COMPACT_BUSY) return
+  await update($, busy, () => COMPACT_BUSY)
+  // Lý do không tự nén được; null là đã nén xong.
+  let why: string | null = null
+  try {
+    const names = (await $.command.list()).map(c => c.name)
+    if (!names.includes('compact')) {
+      why = 'không thấy lệnh compact'
+    } else {
+      const r = await $.command.run({ command: 'compact', args: COMPACT_FOCUS })
+      if (r.text !== undefined && /error|failed|lỗi|không thể/i.test(r.text)) why = r.text.replace(/\s+/g, ' ').slice(0, 100)
+    }
+  } catch (err) {
+    why = String(err instanceof Error ? err.message : err).slice(0, 100)
+  } finally {
+    if ((await read($, busy)) === COMPACT_BUSY) await update($, busy, () => null)
+  }
+  if (why === null) {
+    $.ui.toast('Đã nén cuộc chat')
+    return
+  }
+  const r = await $.prompt.fill({ text: '/compact', mode: 'replace' }).catch(() => null)
+  $.ui.toast(
+    r?.isFilled
+      ? `Chưa tự nén được (${why}). Đã để sẵn /compact trong ô chat, bấm gửi để nén`
+      : `Chưa nén được (${why}). Gõ /compact để nén`,
+  )
+}
+
+// ---- Thẻ You Should Know vẽ lại theo bản mẫu (desktop) ----
+
+/** Màu nền trong suốt nên hợp cả giao diện sáng lẫn tối. */
+const YSK_INK = { bg: '#f59e0b14', border: '#f59e0b40', tag: '#d97706' } as const
+
+const BULB_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">' +
+  '<circle cx="18" cy="18" r="18" fill="#f59e0b" fill-opacity="0.16"/>' +
+  '<g transform="translate(6 6)" fill="none" stroke="#d97706" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/>' +
+  '<path d="M9 18h6"/><path d="M10 22h4"/></g></svg>'
+
+/**
+ * Nút của YSK đổi kiểu như bản mẫu: phím 1 nút đặc, phím 2 nút viền, còn lại chữ trơn.
+ * Chỉ đổi phần hiển thị; `press` (chỗ YSK giữ hàm xử lý) giữ nguyên nên bấm vẫn về YSK.
+ */
+function yskButton(b: YskCard['buttons'][number]): RenderElement {
+  const props = b.props ?? {}
+  const label = yskLabel(typeof props.label === 'string' ? props.label : textOf(b))
+  const variant = props.hotkey === '1' ? 'primary' : props.hotkey === '2' ? 'secondary' : undefined
+  const { plain: _plain, ...chrome } = props
+  const out = {
+    ...b,
+    props: variant ? { ...chrome, label, variant } : { ...props, label },
+    ...(b.children !== undefined ? { children: [label] } : {}),
+  }
+  return out as unknown as RenderElement
+}
+
 function toSnap(u: Pick<SessionUsage, 'context' | 'rateLimits' | 'cost'> | SessionMeasureInput): Snap {
   const order = (k: string) => (k === 'five_hour' ? 0 : k === 'seven_day' ? 1 : 2)
   return {
@@ -524,6 +740,7 @@ function toSnap(u: Pick<SessionUsage, 'context' | 'rateLimits' | 'cost'> | Sessi
 export const register: Register = on => {
   registerProgress(on)
   registerNotes(on)
+  registerHandoff(on)
   let lastAsk = ''
   let warnedFor: number | null = null
 
@@ -551,6 +768,25 @@ export const register: Register = on => {
   on('session.measure', async ($, e, next) => {
     await update($, snap, () => toSnap(e))
     return next(e)
+  })
+
+  // Nén xong (nút Nén, /compact gõ tay hay tự nén) thì cập nhật thanh context ngay bằng cỡ sau nén,
+  // khỏi chờ lượt chat sau mới đo lại.
+  on('session.compact', async ($, e, next) => {
+    const r = await next(e)
+    if (r.skip !== undefined || e.agentId !== undefined || e.trigger === 'precompute') return r
+    let tokens = r.tokensAfter ?? null
+    if (tokens === null) {
+      tokens = await $.session
+        .usage({ breakdown: 'summary' })
+        .then(u => u.context.tokens ?? null)
+        .catch(() => null)
+    }
+    if (tokens !== null) {
+      const t = tokens
+      await update($, snap, s => snapAfterCompact(s, t))
+    }
+    return r
   })
 
   on('prompt.submit', async ($, e, next) => {
@@ -593,9 +829,10 @@ export const register: Register = on => {
     const below = await next(e)
     const belowCard = 'type' in below && below.type === 'engine' ? null : below
 
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const { Box, Button, Text, Markdown } = $.ui.resolve(e)
     const surface = e.surface
-    const now = await read($, tick)
+    // tick = 0 khi mod vừa nạp lại mà chưa có nhịp đếm: lấy giờ thật cho giờ reset.
+    const now = (await read($, tick)) || (await $.clock.now())
     const at = await read($, lastAt)
     const s = await read($, snap)
     const list = await read($, steps)
@@ -604,140 +841,242 @@ export const register: Register = on => {
     const noteCount = (await read($, notes))?.items.length ?? 0
 
     const left = cacheLeft(at, now)
-    const cacheText = e.props.isWorking
-      ? '● cache ấm (đang chạy)'
-      : left === null
-        ? '○ cache chưa rõ'
-        : left === 0
-          ? '○ cache nguội'
-          : `● cache ấm ${fmtDur(left)}`
+    // Cache ấm: ngọn lửa đỏ + chữ xanh (vàng/đỏ khi sắp nguội); nguội hoặc chưa rõ: vòng xám.
+    const isWarm = e.props.isWorking || (left !== null && left > 0)
+    const cacheText = cacheLabel(left, e.props.isWorking)
     const cacheTone = e.props.isWorking ? 'success' : cacheColor(left)
-
-    // Mỗi đoạn là [chữ, màu?]; đoạn có % được tô theo mức dùng.
-    type Seg = { text: string; color?: 'success' | 'warning' | 'error' }
-    const segs: Seg[] = []
-    const sep = (t: string) => segs.push({ text: t })
-    if (s?.ctxTokens != null) {
-      sep(` | ctx ${fmtTok(s.ctxTokens)}`)
-      if (s.ctxPercent != null) {
-        sep(' (')
-        segs.push({ text: `${s.ctxPercent}%`, color: pctColor(s.ctxPercent) })
-        sep(')')
+    const cacheIcon = (() => {
+      if (!isWarm) return <Text key="cache-icon" color={cacheTone}>○</Text>
+      if (e.surface === 'desktop') {
+        const { Svg } = $.ui.resolve(e)
+        return <Svg key="cache-icon" source={FLAME_SVG} alt="Lửa" width={16} height={16} />
       }
-    }
-    ;(s?.limits ?? []).forEach((l, i) => {
-      const pct = Math.round(l.percentUsed)
-      sep(`${i === 0 ? ' | ' : ' · '}${limitLabel(l.kind)} `)
-      segs.push({ text: `${pct}%`, color: pctColor(pct) })
-      if (l.resetsAt) sep(` ↻${fmtDur(Date.parse(l.resetsAt) - now)}`)
-    })
-    if (s?.costUsd != null) sep(` | phiên $${s.costUsd.toFixed(2)}`)
+      return <Text key="cache-icon">🔥</Text>
+    })()
 
-    const handoff = async () => {
-      await update($, busy, () => 'Đang soạn bản handoff…')
-      try {
-        const r = await $.model.fork({ prompt: HANDOFF_PROMPT })
-        if (!r.isAnswered) {
-          $.ui.toast(`Handoff không soạn được: ${r.reason}`)
-          return
-        }
-        const home = (await $.env.get('HOME')) ?? ''
-        const stamp = new Date(await $.clock.now()).toISOString().slice(0, 16).replace(/[:T]/g, '-')
-        const file = `${home}/.claude/handoffs/${stamp}-${(await $.session.id()).slice(0, 8)}.md`
-        await $.fs.write(file, r.text)
-        await $.command.run({ command: 'clear' })
-        await $.prompt.fill({
-          text: `Tiếp tục công việc từ bản handoff dưới đây (bản lưu: ${file}):\n\n${r.text}`,
-          mode: 'replace',
-        })
-        $.ui.toast('Đã /clear và dán handoff vào ô nhập, xem lại rồi gửi')
-      } finally {
-        await update($, busy, () => null)
-        await update($, steps, () => [])
+    const costText = s?.costUsd != null ? ` · Tiền $${s.costUsd.toFixed(2)}` : ''
+
+    // Vòng quota 5h/tuần nằm cùng hàng cache: desktop vẽ SVG (% giữa vòng), terminal dùng ký tự ◔◑◕.
+    const quotas = (s?.limits ?? []).map(l => ({
+      kind: l.kind,
+      label: limitLabel(l.kind),
+      pct: Math.round(l.percentUsed),
+      left: l.resetsAt ? ` ↻${fmtDur(Date.parse(l.resetsAt) - now)}` : '',
+    }))
+    const quotaBlock = (() => {
+      if (quotas.length === 0) return null
+      if (e.surface === 'desktop') {
+        const { Svg } = $.ui.resolve(e)
+        return quotas.map(q => (
+          <Box key={`quota-${q.kind}`} flexDirection="row" alignItems="center" gap="xs">
+            <Svg source={ringSvg(q.pct)} alt={`Quota ${q.label} ${q.pct}%`} width={RING_SIZE} height={RING_SIZE} />
+            <Text key={`qt-${q.kind}`} tabular>
+              <Text dimColor>{q.label}</Text>
+              {q.left}
+            </Text>
+          </Box>
+        ))
       }
-    }
+      return (
+        <Text key="quota" wrap="truncate-end">
+          {quotas.map(q => [
+            <Text key={`q-${q.kind}`} color={pctColor(q.pct)}>{`${ringGlyph(q.pct)} ${q.pct}%`}</Text>,
+            <Text key={`qt-${q.kind}`} dimColor>{` ${q.label}${q.left}   `}</Text>,
+          ])}
+        </Text>
+      )
+    })()
+
+    // Thẻ của plugin bên dưới (You Should Know) đứng riêng một khối, đủ chiều ngang.
+    // Desktop: vẽ lại theo bản mẫu (bóng đèn, nhãn cam, tiêu đề đậm, dòng phụ, nút đặc/viền/trơn).
+    const ysk = belowCard !== null ? parseYsk(belowCard) : null
+    const cardBlock = (() => {
+      if (belowCard === null) return null
+      if (e.surface !== 'desktop' || ysk === null) {
+        return (
+          <Box key="ysk" flexDirection="column">
+            {belowCard}
+          </Box>
+        )
+      }
+      const { Svg } = $.ui.resolve(e)
+      const split = ysk.line !== null ? splitHeadline(ysk.line) : null
+      return (
+        <Box key="ysk" flexDirection="column" gap="sm">
+          <Box
+            flexDirection="row"
+            alignItems="center"
+            gap="md"
+            borderStyle="round"
+            borderColor={YSK_INK.border}
+            backgroundColor={YSK_INK.bg}
+            paddingX="md"
+            paddingY="sm"
+          >
+            <Svg source={BULB_SVG} alt="Bóng đèn" width={36} height={36} />
+            <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+              <Text size="caption" weight="semibold" color={YSK_INK.tag}>
+                {ysk.tag.toUpperCase()}
+              </Text>
+              {split !== null
+                ? [
+                    <Text key="ysk-head" weight="semibold" wrap="wrap">
+                      {split.headline}
+                    </Text>,
+                    split.detail !== '' ? (
+                      <Text key="ysk-detail" size="footnote" dimColor wrap="wrap">
+                        {split.detail}
+                      </Text>
+                    ) : null,
+                  ]
+                : (ysk.body as RenderElement)}
+            </Box>
+          </Box>
+          <Box flexDirection="row" alignItems="center" gap="sm" flexWrap="wrap">
+            {ysk.buttons.map(yskButton)}
+          </Box>
+        </Box>
+      )
+    })()
+
+    const handoff = () => startHandoff($, surface)
+
+    // Bản handoff vừa soạn hiện ngay trên ô chat (vùng này cuộn được trên app desktop).
+    const hDoc = await read($, handoffDoc)
+    const handoffCard =
+      hDoc !== null && (await read($, handoffOpen)) ? (
+        <Box
+          key="handoff-card"
+          flexDirection="column"
+          gap="sm"
+          {...(surface === 'desktop'
+            ? { borderStyle: 'round' as const, borderColor: '#3b82f640', backgroundColor: '#3b82f60f', paddingX: 'md' as const, paddingY: 'sm' as const }
+            : {})}
+        >
+          <Box flexDirection="row" gap={2} flexWrap="wrap" alignItems="center">
+            <Text weight="semibold" bold>Bản handoff</Text>
+            <Text dimColor size="footnote" wrap="truncate-middle">{hDoc.file}</Text>
+          </Box>
+          <Markdown key="handoff-card-md" text={hDoc.text} />
+          <Box flexDirection="row" gap="sm" flexWrap="wrap" alignItems="center">
+            {handoffActions($, $.ui.resolve(e), hDoc, surface, { withClose: true, isBusy: working === HANDOFF_BUSY })}
+          </Box>
+          <Text dimColor size="footnote" wrap="wrap">
+            Đã copy sẵn. Muốn làm tiếp ở phiên sạch: gõ /clear (hoặc mở phiên mới) rồi dán ⌘V.
+          </Text>
+        </Box>
+      ) : null
+
+    const buttons = [
+      <Button
+        key="progress"
+        label={progLabel(pg.done, pg.total, pg.running)}
+        hotkey="t"
+        plain
+        onPress={() => void openProgress($)}
+      />,
+      <Button
+        key="notes"
+        label={noteCount > 0 ? `lưu ý (${noteCount})` : 'lưu ý'}
+        hotkey="l"
+        plain
+        onPress={() => void openNotes($)}
+      />,
+      <Button
+        key="copy-id"
+        label="copy ID"
+        hotkey="c"
+        plain
+        onPress={async () => {
+          const id = await $.session.id()
+          const r = await $.ui.copy({ text: id, surface })
+          $.ui.toast(r.isCopied ? `Đã copy session ID: ${id}` : `Không copy được (${r.reason}). ID: ${id}`)
+        }}
+      />,
+      <Button key="handoff" label="handoff" hotkey="h" plain onPress={handoff} />,
+    ]
+    // Thẻ YSK thay chỗ danh sách gợi ý (cùng dùng phím 1, 2, 0).
+    const body =
+      handoffCard !== null ? (
+        working !== null ? [<Text key="busy" dimColor>{working}</Text>, handoffCard] : handoffCard
+      ) : cardBlock !== null ? (
+        cardBlock
+      ) : working !== null ? (
+        <Text dimColor>{working}</Text>
+      ) : list.length > 0 ? (
+        [
+          ...list.map((t, i) => (
+            <Button
+              key={`step-${i}`}
+              label={t}
+              hotkey={String(i + 1)}
+              plain
+              onPress={async () => {
+                await $.prompt.fill({ text: t, mode: 'replace' })
+                await update($, steps, () => [])
+              }}
+            />
+          )),
+          <Button key="dismiss" label="bỏ qua" hotkey="0" plain onPress={() => update($, steps, () => [])} />,
+        ]
+      ) : null
 
     return (
       <Box flexDirection="column" width={e.props.bodyColumns}>
-        <Box flexDirection="row">
-          <Box flexDirection="row" flexShrink={1} flexWrap="wrap">
-            <Text color={cacheTone} wrap="truncate-end">{cacheText}</Text>
-            {segs.map((g, i) =>
-              g.color ? (
-                <Text key={`seg-${i}`} color={g.color}>{g.text}</Text>
-              ) : (
-                <Text key={`seg-${i}`} dimColor>{g.text}</Text>
-              ),
-            )}
+        <Box flexDirection="row" alignItems="center" flexWrap="wrap" columnGap="lg">
+          <Box flexDirection="row" alignItems="center" gap="xs" flexShrink={1}>
+            {cacheIcon}
+            <Text wrap="truncate-end">
+              <Text color={cacheTone}>{cacheText}</Text>
+              {costText !== '' ? <Text dimColor>{costText}</Text> : ''}
+            </Text>
           </Box>
+          {quotaBlock}
         </Box>
-        {(() => {
-          const buttons = [
-            <Button
-              key="progress"
-              label={progLabel(pg.done, pg.total, pg.running)}
-              hotkey="t"
-              plain
-              onPress={() => void openProgress($)}
-            />,
-            <Button
-              key="notes"
-              label={noteCount > 0 ? `lưu ý (${noteCount})` : 'lưu ý'}
-              hotkey="l"
-              plain
-              onPress={() => void openNotes($)}
-            />,
-            <Button
-              key="copy-id"
-              label="copy ID"
-              hotkey="c"
-              plain
-              onPress={async () => {
-                const id = await $.session.id()
-                const r = await $.ui.copy({ text: id, surface })
-                $.ui.toast(r.isCopied ? `Đã copy session ID: ${id}` : `Không copy được (${r.reason}). ID: ${id}`)
-              }}
-            />,
-            <Button key="handoff" label="handoff" hotkey="h" plain onPress={handoff} />,
-          ]
-          const left =
-            belowCard !== null ? (
-              belowCard
-            ) : working !== null ? (
-              <Text dimColor>{working}</Text>
-            ) : list.length > 0 ? (
-              [
-                ...list.map((t, i) => (
-                  <Button
-                    key={`step-${i}`}
-                    label={t}
-                    hotkey={String(i + 1)}
-                    plain
-                    onPress={async () => {
-                      await $.prompt.fill({ text: t, mode: 'replace' })
-                      await update($, steps, () => [])
-                    }}
-                  />
-                )),
-                <Button key="dismiss" label="bỏ qua" hotkey="0" plain onPress={() => update($, steps, () => [])} />,
-              ]
-            ) : null
-          // Có gợi ý: nút xếp cột dọc bên phải, cạnh danh sách. Không có: một hàng sát phải.
-          return left === null ? (
-            <Box flexDirection="row" gap={3} justifyContent="flex-end">
+        {/* Không có gì bên dưới, hoặc đang hiện bản handoff: nút xếp một hàng ngang sát phải để bản handoff
+            chiếm trọn bề ngang. Có gợi ý hoặc thẻ YSK: nút xếp cột dọc bên phải. */}
+        {body === null || handoffCard !== null ? (
+          <Box flexDirection="column" gap="sm">
+            <Box key="nut-ngang" flexDirection="row" gap={3} justifyContent="flex-end" flexWrap="wrap">
               {buttons}
             </Box>
-          ) : (
-            <Box flexDirection="row" gap={2}>
-              <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-                {left}
-              </Box>
-              <Box flexDirection="column" flexShrink={0}>
-                {buttons}
-              </Box>
+            {body}
+          </Box>
+        ) : (
+          <Box flexDirection="row" gap={2}>
+            <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+              {body}
             </Box>
-          )
-        })()}
+            <Box key="nut-doc" flexDirection="column" flexShrink={0}>
+              {buttons}
+            </Box>
+          </Box>
+        )}
+      </Box>
+    )
+  })
+
+  // ---- Dưới ô nhập: thanh token ----
+  // App desktop (4.23): dưới ô nhập phiên local chỉ có vùng SessionMode (cạnh tên model), tối đa 24 ký tự,
+  // dồn phải, chỉ vẽ chữ có màu (bỏ Svg). Nên vẽ 10 ô ▰ cùng ký tự đổi màu + số gọn "394k".
+  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    const s = await read($, snap)
+    const tokens = s?.ctxTokens ?? null
+    if (tokens === null) return next(e)
+    const pct = s?.ctxPercent ?? ctxPct(tokens)
+    const cells = ctxCells(pct)
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const modes = e.props.modes
+    const look = compactLook(pct, (await read($, busy)) === COMPACT_BUSY)
+    return (
+      <Box flexDirection="row" alignItems="center" gap={1}>
+        <Text wrap="truncate-end">
+          <Text key="ctx-on" color={pctColor(pct)}>{cells.on}</Text>
+          <Text key="ctx-off" dimColor>{cells.off}</Text>
+          <Text key="ctx-num" dimColor>{` ${fmtTok(tokens)}`}</Text>
+        </Text>
+        <Button key="compact" label={look.label} plain dimColor={look.dim} onPress={() => startCompact($)} />
+        {modes.length > 0 ? <Text key="modes" dimColor>{modes.join(' & ')}</Text> : null}
       </Box>
     )
   })

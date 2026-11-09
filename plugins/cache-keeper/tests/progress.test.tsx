@@ -32,6 +32,7 @@ test('bảng tiến độ đếm việc và subagent', async ($, on) => {
 })
 
 test('thanh có nút tiến độ và copy ID', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-13T10:00:00Z') })
   on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
   const ui = await $.ui.mount({
     plugin: 'cache-keeper',
@@ -67,4 +68,17 @@ test('chưa có danh sách việc thì Haiku tóm tắt và bảng vẫn hiện'
   expect(await ui.find({ type: 'Text', text: /1\/3 \(33%\)/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /▶ Viết bảng/ })).toBeDefined()
   await ui.unmount()
+})
+
+test('hook của mod lỗi thì tool của Claude vẫn chạy tiếp, không bị chặn', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-11T10:00:00Z') })
+  let ran = 0
+  on('tool.call', () => {
+    ran += 1
+    return { result: { oldTodos: [], newTodos: [] } }
+  })
+  // Danh sách việc hỏng (thiếu todos) làm hook TodoWrite của mod văng lỗi; engine bỏ qua hook lỗi và cho tool chạy.
+  const r = await $.tool.call({ tool: 'TodoWrite' } as never)
+  expect(ran).toBe(1)
+  expect((r as { deny?: string }).deny).toBeUndefined()
 })

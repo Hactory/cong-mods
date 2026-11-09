@@ -58,6 +58,7 @@ declare module 'claude-code' {
       notesBusy: boolean
       handoff: Handoff | null
       handoffOpen: boolean
+      infoOpen: boolean
     }
   }
 }

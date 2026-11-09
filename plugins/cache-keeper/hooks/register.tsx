@@ -16,7 +16,6 @@ import {
   COLD_WARN_MS,
   autoCompactHint,
   autoCompactInfo,
-  infoSvg,
   shouldAutoCompact,
   cacheColor,
   cacheLabel,
@@ -554,6 +553,8 @@ const HANDOFF_PANE = 'handoff'
 const HANDOFF_TITLE = 'Handoff'
 const handoffDoc = atom({ plugin: 'cache-keeper', key: 'handoff' } as const, null as Handoff | null)
 const handoffOpen = atom({ plugin: 'cache-keeper', key: 'handoffOpen' } as const, false)
+/** Khung mô tả tự nén (mở bằng nút ⓘ ở hàng cache). */
+const infoOpen = atom({ plugin: 'cache-keeper', key: 'infoOpen' } as const, false)
 const HANDOFF_BUSY = 'Đang soạn bản handoff…'
 
 const handoffDraft = (doc: Handoff) => `Tiếp tục công việc từ bản handoff dưới đây (bản lưu: ${doc.file}):\n\n${doc.text}`
@@ -961,15 +962,28 @@ export const register: Register = on => {
       )
     })()
 
-    // ⓘ mô tả dấu tích tự nén: dòng dưới ô nhập không hiện được chữ khi trỏ chuột, nên đặt ở đây (chỉ desktop,
-    // Svg isInteractive mới hiện <title>).
-    const autoInfo = await (async () => {
-      if (e.surface !== 'desktop') return null
-      const { Svg } = $.ui.resolve(e)
-      const isOn = await autoCompactOn($)
-      const text = autoCompactInfo(isOn)
-      return <Svg key="auto-info" source={infoSvg(isOn, text)} alt={text} width={16} height={16} isInteractive />
-    })()
+    // ⓘ mô tả dấu tích tự nén: bấm để mở/đóng khung mô tả ngay dưới hàng cache. Dòng dưới ô nhập không
+    // hiện được chữ khi trỏ chuột, còn <title> của Svg trong app không hiện nên dùng nút bấm.
+    const isAutoOn = await autoCompactOn($)
+    const isInfoOpen = await read($, infoOpen)
+    const autoInfo = (
+      <Button
+        key="auto-info"
+        label="ⓘ"
+        plain
+        dimColor={!isInfoOpen}
+        onPress={() => update($, infoOpen, v => !v)}
+      />
+    )
+    const infoBlock = isInfoOpen ? (
+      <Box key="auto-info-box" flexDirection="row" gap={2} alignItems="flex-start">
+        <Text key="auto-info-text" wrap="wrap">
+          <Text color={isAutoOn ? 'green' : undefined} dimColor={!isAutoOn}>{isAutoOn ? '☑ ' : '☐ '}</Text>
+          {autoCompactInfo(isAutoOn)}
+        </Text>
+        <Button key="auto-info-close" label="đóng" plain dimColor onPress={() => update($, infoOpen, () => false)} />
+      </Box>
+    ) : null
 
     // Thẻ của plugin bên dưới (You Should Know) đứng riêng một khối, đủ chiều ngang.
     // Desktop: vẽ lại theo bản mẫu (bóng đèn, nhãn cam, tiêu đề đậm, dòng phụ, nút đặc/viền/trơn).
@@ -1118,6 +1132,7 @@ export const register: Register = on => {
           {quotaBlock}
           {autoInfo}
         </Box>
+        {infoBlock}
         {/* Không có gì bên dưới, hoặc đang hiện bản handoff: nút xếp một hàng ngang sát phải để bản handoff
             chiếm trọn bề ngang. Có gợi ý hoặc thẻ YSK: nút xếp cột dọc bên phải. */}
         {body === null || handoffCard !== null ? (

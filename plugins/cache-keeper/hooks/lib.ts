@@ -398,7 +398,7 @@ export function autoCompactHint(isOn: boolean): string {
     : 'Đã TẮT tự nén cho phiên này. Cache sắp nguội chỉ nhắc, không tự /compact. Phiên mở sau cũng tắt theo. Bấm dấu tích để bật lại.'
 }
 
-/** Chữ hiện khi trỏ chuột vào ⓘ ở hàng cache: mô tả dấu tích tự nén cạnh nút Nén. */
+/** Chữ trong khung mở bằng nút ⓘ ở hàng cache: mô tả dấu tích tự nén cạnh nút Nén. */
 export function autoCompactInfo(isOn: boolean): string {
   return (
     `Tự nén khi cache còn 5 phút: đang ${isOn ? 'BẬT' : 'TẮT'} ở phiên này. ` +
@@ -410,17 +410,3 @@ export function autoCompactInfo(isOn: boolean): string {
   )
 }
 
-const xmlEsc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-
-/** Biểu tượng ⓘ có <title> để hiện mô tả khi trỏ chuột (cần Svg isInteractive). Xanh khi bật, xám khi tắt. */
-export function infoSvg(isOn: boolean, text: string): string {
-  const c = isOn ? '#22c55e' : '#9ca3af'
-  return (
-    '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" style="cursor:help">' +
-    `<title>${xmlEsc(text)}</title>` +
-    `<circle cx="8" cy="8" r="6.6" fill="none" stroke="${c}" stroke-width="1.4"/>` +
-    `<circle cx="8" cy="5" r="0.9" fill="${c}"/>` +
-    `<path d="M8 7.2v4.3" stroke="${c}" stroke-width="1.5" stroke-linecap="round"/>` +
-    '</svg>'
-  )
-}

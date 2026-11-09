@@ -785,7 +785,13 @@ async function syncCtx($: EngineInterface, isMeasured: boolean) {
   const u = await $.session.usage().catch(() => null)
   if (u === null) return
   if (u.context.tokens != null) {
-    if (isMeasured) await update($, snap, () => toSnap(u))
+    if (isMeasured) return void (await update($, snap, () => toSnap(u)))
+    // Nhịp 5 giây: bắt kịp số đo mới mà session.measure chưa đẩy tới (từng trễ vài nghìn token).
+    const prev = await read($, snap)
+    const fresh = toSnap(u)
+    if (prev && prev.ctxTokens !== fresh.ctxTokens) {
+      await update($, snap, s => (s ? { ...s, ctxTokens: fresh.ctxTokens, ctxPercent: fresh.ctxPercent } : s))
+    }
     return
   }
   const b = await $.session.usage({ breakdown: 'summary' }).catch(() => null)

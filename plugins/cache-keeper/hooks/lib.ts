@@ -78,6 +78,27 @@ export function compactLook(pct: number, isCompacting: boolean): { label: string
   return { label: 'Nén', dim: level === 'success' }
 }
 
+/**
+ * Cỡ context ngay sau khi nén. Engine bỏ trống số token thật (`context.tokens`) cho tới lượt trả lời
+ * kế tiếp, nên ưu tiên số ước lượng của bảng chia context (/context), rồi tới `tokensAfter` của lần nén.
+ * Không dùng `context.tokens`: lúc này nó rỗng hoặc còn là số cũ trước khi nén.
+ */
+export function tokensAfterCompact(
+  tokensAfter: number | null | undefined,
+  u: { context: { breakdown?: { totalTokens: number } } } | null,
+): number | null {
+  const est = u?.context.breakdown?.totalTokens
+  if (typeof est === 'number' && est > 0) return est
+  if (typeof tokensAfter === 'number' && tokensAfter > 0) return tokensAfter
+  return null
+}
+
+/** Số đo mới mà chưa có số token (vừa nén, chưa có lượt trả lời) thì giữ số context đang hiện. */
+export function keepCtxIfMissing<S extends { ctxTokens: number | null; ctxPercent: number | null }>(prev: S | null, next: S): S {
+  if (next.ctxTokens !== null || prev === null || prev.ctxTokens === null) return next
+  return { ...next, ctxTokens: prev.ctxTokens, ctxPercent: prev.ctxPercent }
+}
+
 /** Số đo context sau khi nén: thay cỡ context, giữ nguyên quota và chi phí đã đo. */
 export function snapAfterCompact<S extends { ctxTokens: number | null; ctxPercent: number | null }>(
   s: S | null,

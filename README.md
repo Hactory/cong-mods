@@ -22,7 +22,7 @@ Mod là plugin vẽ thêm giao diện bên trong Claude Code; chạy được tr
 **Dòng dưới ô nhập**
 
 - Thanh context 10 ô đổi màu kèm số token (vd `394k`). Màu theo % đã dùng: xanh dưới 50%, cam dưới 80%, đỏ từ 80%. % tính theo mốc tự tóm tắt 600k token (`autoCompactWindow`); dùng mốc khác thì sửa `CTX_MOC` trong `plugins/cache-keeper/hooks/lib.ts`.
-- Nút `Nén`: chạy `/compact` giữ lại mục tiêu, việc đã xong, việc dở và quyết định đã chốt; không chạy được thì điền sẵn `/compact` vào ô chat. Nút mờ khi context còn xanh, rõ khi cam, thành `🔴 Nén` khi đỏ. Nén xong thanh context cập nhật ngay.
+- Nút `Nén`: chạy `/compact` giữ lại mục tiêu, việc đã xong, việc dở và quyết định đã chốt; không chạy được thì điền sẵn `/compact` vào ô chat. Nút mờ khi context còn xanh, rõ khi cam, thành `🔴 Nén` khi đỏ. Nén xong (bằng nút, tự nén hay gõ `/compact`) thanh context cập nhật ngay bằng số ước lượng; lượt trả lời kế tiếp thay bằng số đo thật.
 - Dấu tích `☑` cạnh `Nén`: tự nén khi cache còn 5 phút (mặc định bật, bấm thành `☐` là tắt). Chỉ nén khi Claude đang rảnh, context từ 50k token, và đã có lượt chat mới kể từ lần nén trước (nén rồi mà chưa chat thêm thì không nén lại). Mỗi phiên giữ bật/tắt riêng; phiên mở sau theo lần bật/tắt cuối cùng. Trỏ chuột vào biểu tượng ⓘ ở hàng cache phía trên ô nhập để đọc mô tả (dòng dưới ô nhập không cho mod hiện chữ khi trỏ chuột); bấm dấu tích cũng hiện thông báo giải thích.
 
 Hook của mod mà lỗi thì Claude Code tự bỏ qua, việc của Claude vẫn chạy tiếp (có test chứng minh).

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { cacheColor, ctxPct, CTX_MOC, parseAiSum, pctColor, cacheLeft, fmtDur, fmtTok, limitLabel, parseSteps } from '../hooks/lib'
-import { cacheLabel, compactLook, snapAfterCompact, ctxBarSvg, ctxFilled, ringGlyph, ringSvg, splitHeadline } from '../hooks/lib'
+import { cacheLabel, compactLook, keepCtxIfMissing, snapAfterCompact, tokensAfterCompact, ctxBarSvg, ctxFilled, ringGlyph, ringSvg, splitHeadline } from '../hooks/lib'
 
 describe('định dạng', () => {
   test('đếm ngược', async () => {
@@ -106,5 +106,22 @@ describe('số đo sau khi nén', () => {
     expect(after.costUsd).toBe(162.56)
     expect(after.limits).toEqual(before.limits)
     expect(snapAfterCompact(null, 21_000)).toEqual({ ctxTokens: 21_000, ctxPercent: ctxPct(21_000), costUsd: null, limits: [] })
+  })
+})
+
+describe('cỡ context ngay sau khi nén', () => {
+  test('ưu tiên số ước lượng của bảng /context, rồi tới tokensAfter', () => {
+    expect(tokensAfterCompact(20_000, { context: { breakdown: { totalTokens: 95_000 } } })).toBe(95_000)
+    expect(tokensAfterCompact(20_000, { context: {} })).toBe(20_000)
+    expect(tokensAfterCompact(undefined, null)).toBeNull()
+    expect(tokensAfterCompact(0, { context: { breakdown: { totalTokens: 0 } } })).toBeNull()
+  })
+  test('số đo chưa có token (vừa nén) thì giữ số đang hiện, có token thì lấy số mới', () => {
+    const prev = { ctxTokens: 95_000, ctxPercent: 16, costUsd: 1, limits: [] }
+    const blank = { ctxTokens: null, ctxPercent: null, costUsd: 2, limits: [] }
+    expect(keepCtxIfMissing(prev, blank)).toEqual({ ctxTokens: 95_000, ctxPercent: 16, costUsd: 2, limits: [] })
+    const fresh = { ctxTokens: 120_000, ctxPercent: 20, costUsd: 2, limits: [] }
+    expect(keepCtxIfMissing(prev, fresh)).toEqual(fresh)
+    expect(keepCtxIfMissing(null, blank)).toEqual(blank)
   })
 })

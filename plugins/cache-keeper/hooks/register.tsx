@@ -23,6 +23,8 @@ import {
   cacheLeft,
   compactLook,
   snapAfterCompact,
+  tokensAfterCompact,
+  keepCtxIfMissing,
   ctxCells,
   fmtDur,
   fmtTok,
@@ -771,6 +773,15 @@ function toSnap(u: Pick<SessionUsage, 'context' | 'rateLimits' | 'cost'> | Sessi
   }
 }
 
+/** Ghi cỡ context sau nén và mốc nén. Gọi từ hook nén và từ dòng compact_boundary, chạy hai lần cũng không sao. */
+async function refreshAfterCompact($: EngineInterface, tokensAfter: number | null) {
+  const u = await $.session.usage({ breakdown: 'summary' }).catch(() => null)
+  const tokens = tokensAfterCompact(tokensAfter, u)
+  if (tokens !== null) await update($, snap, s => snapAfterCompact(s, tokens))
+  const done = await $.clock.now()
+  await update($, compactedAt, () => done)
+}
+
 export const register: Register = on => {
   registerProgress(on)
   registerNotes(on)
@@ -826,7 +837,7 @@ export const register: Register = on => {
   })
 
   on('session.measure', async ($, e, next) => {
-    await update($, snap, () => toSnap(e))
+    await update($, snap, s => keepCtxIfMissing(s, toSnap(e)))
     return next(e)
   })
 
@@ -835,19 +846,18 @@ export const register: Register = on => {
   on('session.compact', async ($, e, next) => {
     const r = await next(e)
     if (r.skip !== undefined || e.agentId !== undefined || e.trigger === 'precompute') return r
-    let tokens = r.tokensAfter ?? null
-    if (tokens === null) {
-      tokens = await $.session
-        .usage({ breakdown: 'summary' })
-        .then(u => u.context.tokens ?? null)
-        .catch(() => null)
+    const after = r.tokensAfter ?? null
+    $.clock.after(0, () => void refreshAfterCompact($, after))
+    return r
+  })
+
+  // Lối dự phòng: plugin khác chặn hook session.compact của mod thì vẫn bắt được mốc nén qua dòng
+  // "Conversation compacted" (compact_boundary) ghi vào cuộc chat chính.
+  on('session.append', async ($, e, next) => {
+    const r = await next(e)
+    if (e.agentId === undefined && e.message.type === 'system' && e.message.name === 'compact_boundary') {
+      $.clock.after(0, () => void refreshAfterCompact($, null))
     }
-    if (tokens !== null) {
-      const t = tokens
-      await update($, snap, s => snapAfterCompact(s, t))
-    }
-    const done = await $.clock.now()
-    await update($, compactedAt, () => done)
     return r
   })
 

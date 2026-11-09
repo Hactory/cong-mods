@@ -346,3 +346,33 @@ export function parseNotes(text: string): { kind: NoteKindLib; text: string; why
     .sort((a, b) => order(a.kind) - order(b.kind))
     .slice(0, 12)
 }
+
+/** Context nhỏ hơn mức này thì tự nén không đáng (bản tóm tắt gần bằng chính nó). */
+export const AUTO_COMPACT_MIN_TOKENS = 50_000
+
+/**
+ * Có tự nén lúc này không: bật, cache còn ấm nhưng chỉ còn ≤ 5 phút, Claude đang rảnh, context đủ lớn,
+ * và đã có lượt chat mới kể từ lần nén trước (nén rồi mà chưa chat thêm thì không nén lại).
+ */
+export function shouldAutoCompact(o: {
+  isOn: boolean
+  lastAt: number | null
+  now: number
+  compactedAt: number | null
+  isRunning: boolean
+  isBusy: boolean
+  tokens: number | null
+}): boolean {
+  if (!o.isOn || o.isRunning || o.isBusy || o.lastAt === null) return false
+  if (o.tokens === null || o.tokens < AUTO_COMPACT_MIN_TOKENS) return false
+  if (o.compactedAt !== null && o.compactedAt >= o.lastAt) return false
+  const left = cacheLeft(o.lastAt, o.now)
+  return left !== null && left > 0 && left <= COLD_WARN_MS
+}
+
+/** Mô tả nút tích tự nén (app không có chữ hiện khi trỏ chuột ở vùng này nên báo bằng toast khi bấm). */
+export function autoCompactHint(isOn: boolean): string {
+  return isOn
+    ? 'Đã BẬT tự nén cho phiên này khi cache còn 5 phút: lúc Claude rảnh, context từ 50k, cache sắp nguội thì tự chạy /compact để lần chat sau đọc lại bản gọn, đỡ tốn quota. Đã nén rồi thì chờ có lượt chat mới mới nén lại. Phiên mở sau cũng bật theo.'
+    : 'Đã TẮT tự nén cho phiên này. Cache sắp nguội chỉ nhắc, không tự /compact. Phiên mở sau cũng tắt theo. Bấm dấu tích để bật lại.'
+}

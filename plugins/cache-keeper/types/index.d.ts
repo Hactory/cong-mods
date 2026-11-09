@@ -49,6 +49,8 @@ declare module 'claude-code' {
       snap: Snap | null
       steps: string[]
       busy: string | null
+      autoCompact: boolean | null
+      compactedAt: number | null
       prog: Prog
       aiSum: AiSum | null
       aiBusy: boolean

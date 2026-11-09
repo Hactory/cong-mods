@@ -14,6 +14,8 @@ import {
   NOTE_LABEL,
   parseNotes,
   COLD_WARN_MS,
+  autoCompactHint,
+  shouldAutoCompact,
   cacheColor,
   cacheLabel,
   cacheLeft,
@@ -45,6 +47,14 @@ const tick = atom({ plugin: 'cache-keeper', key: 'tick' } as const, 0)
 const snap = atom({ plugin: 'cache-keeper', key: 'snap' } as const, null)
 const steps = atom({ plugin: 'cache-keeper', key: 'steps' } as const, [] as string[])
 const busy = atom({ plugin: 'cache-keeper', key: 'busy' } as const, null)
+/**
+ * Nút tích "tự nén khi cache còn 5 phút" của RIÊNG phiên này; null là phiên chưa lấy giá trị.
+ * Phiên mới lấy lần bật/tắt cuối cùng ở bất kỳ phiên nào ($.store), chưa từng bấm thì bật.
+ */
+const autoCompact = atom({ plugin: 'cache-keeper', key: 'autoCompact' } as const, null as boolean | null)
+/** Lúc nén xong gần nhất (mọi kiểu nén): chưa có lượt chat mới sau mốc này thì không tự nén lại. */
+const compactedAt = atom({ plugin: 'cache-keeper', key: 'compactedAt' } as const, null as number | null)
+const AUTO_KEY = 'autoCompact'
 
 // ---- Bảng "Tiến độ" mở bên cạnh: mục tiêu, danh sách việc, subagent, phiên phụ ----
 
@@ -666,7 +676,23 @@ function startCompact($: EngineInterface) {
   $.clock.after(0, () => void compactNow($))
 }
 
-async function compactNow($: EngineInterface) {
+/** Giá trị của phiên này; chưa có thì theo lần bật/tắt cuối (mặc định bật). */
+async function autoCompactOn($: EngineInterface): Promise<boolean> {
+  const own = await read($, autoCompact)
+  if (own !== null) return own
+  const saved = await $.store.get(AUTO_KEY).catch(() => undefined)
+  return typeof saved === 'boolean' ? saved : true
+}
+
+async function toggleAutoCompact($: EngineInterface) {
+  const isOn = !(await autoCompactOn($))
+  await update($, autoCompact, () => isOn)
+  await $.store.set(AUTO_KEY, isOn).catch(() => undefined)
+  $.ui.toast(autoCompactHint(isOn))
+}
+
+/** `isAuto`: tự nén lúc cache sắp nguội; lỗi thì chỉ báo, không đè chữ đang gõ trong ô chat. */
+async function compactNow($: EngineInterface, isAuto = false) {
   if ((await read($, busy)) === COMPACT_BUSY) return
   await update($, busy, () => COMPACT_BUSY)
   // Lý do không tự nén được; null là đã nén xong.
@@ -685,7 +711,13 @@ async function compactNow($: EngineInterface) {
     if ((await read($, busy)) === COMPACT_BUSY) await update($, busy, () => null)
   }
   if (why === null) {
+    const t = await $.clock.now()
+    await update($, compactedAt, () => t)
     $.ui.toast('Đã nén cuộc chat')
+    return
+  }
+  if (isAuto) {
+    $.ui.toast(`Tự nén không chạy được (${why}). Gõ /compact nếu muốn nén`)
     return
   }
   const r = await $.prompt.fill({ text: '/compact', mode: 'replace' }).catch(() => null)
@@ -743,6 +775,10 @@ export const register: Register = on => {
   registerHandoff(on)
   let lastAsk = ''
   let warnedFor: number | null = null
+  // Claude đang chạy một lượt (từ lúc gửi tới turn.complete): khi đó không tự nén.
+  let isRunning = false
+  // Mỗi mốc lastAt chỉ thử tự nén một lần, kể cả khi lần đó không nén được.
+  let autoTriedFor: number | null = null
 
   on('session.start', async ($, e, next) => {
     const now = await $.clock.now()
@@ -750,11 +786,33 @@ export const register: Register = on => {
     await progressStart($)
     const u = await $.session.usage()
     await update($, snap, () => toSnap(u))
+    // Chỉ lấy lần bật/tắt cuối khi phiên chưa có giá trị riêng: /reload-plugins chạy lại session.start
+    // nhưng không được đè lựa chọn của chính phiên này.
+    if ((await read($, autoCompact)) === null) {
+      const isOn = await autoCompactOn($)
+      await update($, autoCompact, () => isOn)
+    }
 
     $.clock.every(30_000, async () => {
       const t = await $.clock.now()
       await update($, tick, () => t)
       const at = await read($, lastAt)
+      const isAuto = shouldAutoCompact({
+        isOn: await autoCompactOn($),
+        lastAt: at,
+        now: t,
+        compactedAt: await read($, compactedAt),
+        isRunning,
+        isBusy: (await read($, busy)) !== null,
+        tokens: (await read($, snap))?.ctxTokens ?? null,
+      })
+      if (isAuto && at !== autoTriedFor) {
+        autoTriedFor = at
+        warnedFor = at
+        $.ui.toast('Cache còn 5 phút: đang tự nén cuộc chat (tắt ở dấu tích cạnh nút Nén)')
+        $.clock.after(0, () => void compactNow($, true))
+        return
+      }
       const left = cacheLeft(at, t)
       if (at !== null && left !== null && left > 0 && left <= COLD_WARN_MS && warnedFor !== at) {
         warnedFor = at
@@ -786,11 +844,14 @@ export const register: Register = on => {
       const t = tokens
       await update($, snap, s => snapAfterCompact(s, t))
     }
+    const done = await $.clock.now()
+    await update($, compactedAt, () => done)
     return r
   })
 
   on('prompt.submit', async ($, e, next) => {
     lastAsk = e.text
+    isRunning = true
     await progressPrompt($, e.text)
     await update($, steps, () => [])
     return next(e)
@@ -798,6 +859,7 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     if (e.agentId) return next(e)
+    isRunning = false
 
     const now = await $.clock.now()
     await update($, lastAt, () => now)
@@ -1068,6 +1130,7 @@ export const register: Register = on => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const modes = e.props.modes
     const look = compactLook(pct, (await read($, busy)) === COMPACT_BUSY)
+    const isAuto = await autoCompactOn($)
     return (
       <Box flexDirection="row" alignItems="center" gap={1}>
         <Text wrap="truncate-end">
@@ -1076,6 +1139,13 @@ export const register: Register = on => {
           <Text key="ctx-num" dimColor>{` ${fmtTok(tokens)}`}</Text>
         </Text>
         <Button key="compact" label={look.label} plain dimColor={look.dim} onPress={() => startCompact($)} />
+        <Button
+          key="auto-compact"
+          label={isAuto ? '☑' : '☐'}
+          plain
+          dimColor={!isAuto}
+          onPress={() => void toggleAutoCompact($)}
+        />
         {modes.length > 0 ? <Text key="modes" dimColor>{modes.join(' & ')}</Text> : null}
       </Box>
     )

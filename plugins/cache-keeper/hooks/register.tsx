@@ -717,6 +717,7 @@ async function compactNow($: EngineInterface, isAuto = false) {
   if (why === null) {
     const t = await $.clock.now()
     await update($, compactedAt, () => t)
+    await syncCtx($, false)
     $.ui.toast('Đã nén cuộc chat')
     return
   }
@@ -773,13 +774,30 @@ function toSnap(u: Pick<SessionUsage, 'context' | 'rateLimits' | 'cost'> | Sessi
   }
 }
 
-/** Ghi cỡ context sau nén và mốc nén. Gọi từ hook nén và từ dòng compact_boundary, chạy hai lần cũng không sao. */
-async function refreshAfterCompact($: EngineInterface, tokensAfter: number | null) {
-  const u = await $.session.usage({ breakdown: 'summary' }).catch(() => null)
-  const tokens = tokensAfterCompact(tokensAfter, u)
-  if (tokens !== null) await update($, snap, s => snapAfterCompact(s, tokens))
-  const done = await $.clock.now()
-  await update($, compactedAt, () => done)
+/**
+ * Đọc lại cỡ context. Ngay sau khi nén (và khi reload lúc đó) Claude chưa có số đo thật tới lượt trả lời
+ * kế tiếp, nên lấy số ước lượng như lệnh /context; không có thì giữ số đang hiện. Không dựa vào hook
+ * session.compact: plugin bảo mật chạy trước có thể cho sự kiện đi qua mod. Thấy số đo rỗng sau một lượt
+ * chat thì coi như vừa nén và ghi mốc nén (để tự nén không chạy lại khi chưa chat thêm).
+ */
+async function syncCtx($: EngineInterface, isMeasured: boolean) {
+  const u = await $.session.usage().catch(() => null)
+  if (u === null) return
+  if (u.context.tokens != null) {
+    if (isMeasured) await update($, snap, () => toSnap(u))
+    return
+  }
+  const b = await $.session.usage({ breakdown: 'summary' }).catch(() => null)
+  const est = tokensAfterCompact(null, b)
+  const prev = await read($, snap)
+  const base = keepCtxIfMissing(prev, toSnap(u))
+  const out = est !== null ? snapAfterCompact(base, est) : base
+  if (JSON.stringify(out) !== JSON.stringify(prev)) await update($, snap, () => out)
+  const at = await read($, lastAt)
+  if (est !== null && at !== null && ((await read($, compactedAt)) ?? 0) < at) {
+    const t = await $.clock.now()
+    await update($, compactedAt, () => t)
+  }
 }
 
 export const register: Register = on => {
@@ -797,14 +815,16 @@ export const register: Register = on => {
     const now = await $.clock.now()
     await update($, tick, () => now)
     await progressStart($)
-    const u = await $.session.usage()
-    await update($, snap, () => toSnap(u))
+    await syncCtx($, true)
     // Chỉ lấy lần bật/tắt cuối khi phiên chưa có giá trị riêng: /reload-plugins chạy lại session.start
     // nhưng không được đè lựa chọn của chính phiên này.
     if ((await read($, autoCompact)) === null) {
       const isOn = await autoCompactOn($)
       await update($, autoCompact, () => isOn)
     }
+
+    // Bắt kịp lúc vừa nén (nút Nén, tự nén hay gõ /compact): số đo rỗng thì đổi sang số ước lượng.
+    $.clock.every(5_000, () => syncCtx($, false))
 
     $.clock.every(30_000, async () => {
       const t = await $.clock.now()
@@ -839,26 +859,6 @@ export const register: Register = on => {
   on('session.measure', async ($, e, next) => {
     await update($, snap, s => keepCtxIfMissing(s, toSnap(e)))
     return next(e)
-  })
-
-  // Nén xong (nút Nén, /compact gõ tay hay tự nén) thì cập nhật thanh context ngay bằng cỡ sau nén,
-  // khỏi chờ lượt chat sau mới đo lại.
-  on('session.compact', async ($, e, next) => {
-    const r = await next(e)
-    if (r.skip !== undefined || e.agentId !== undefined || e.trigger === 'precompute') return r
-    const after = r.tokensAfter ?? null
-    $.clock.after(0, () => void refreshAfterCompact($, after))
-    return r
-  })
-
-  // Lối dự phòng: plugin khác chặn hook session.compact của mod thì vẫn bắt được mốc nén qua dòng
-  // "Conversation compacted" (compact_boundary) ghi vào cuộc chat chính.
-  on('session.append', async ($, e, next) => {
-    const r = await next(e)
-    if (e.agentId === undefined && e.message.type === 'system' && e.message.name === 'compact_boundary') {
-      $.clock.after(0, () => void refreshAfterCompact($, null))
-    }
-    return r
   })
 
   on('prompt.submit', async ($, e, next) => {

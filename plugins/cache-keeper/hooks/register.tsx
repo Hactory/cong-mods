@@ -15,6 +15,8 @@ import {
   parseNotes,
   COLD_WARN_MS,
   autoCompactHint,
+  autoCompactInfo,
+  infoSvg,
   shouldAutoCompact,
   cacheColor,
   cacheLabel,
@@ -949,6 +951,16 @@ export const register: Register = on => {
       )
     })()
 
+    // ⓘ mô tả dấu tích tự nén: dòng dưới ô nhập không hiện được chữ khi trỏ chuột, nên đặt ở đây (chỉ desktop,
+    // Svg isInteractive mới hiện <title>).
+    const autoInfo = await (async () => {
+      if (e.surface !== 'desktop') return null
+      const { Svg } = $.ui.resolve(e)
+      const isOn = await autoCompactOn($)
+      const text = autoCompactInfo(isOn)
+      return <Svg key="auto-info" source={infoSvg(isOn, text)} alt={text} width={16} height={16} isInteractive />
+    })()
+
     // Thẻ của plugin bên dưới (You Should Know) đứng riêng một khối, đủ chiều ngang.
     // Desktop: vẽ lại theo bản mẫu (bóng đèn, nhãn cam, tiêu đề đậm, dòng phụ, nút đặc/viền/trơn).
     const ysk = belowCard !== null ? parseYsk(belowCard) : null
@@ -1094,6 +1106,7 @@ export const register: Register = on => {
             </Text>
           </Box>
           {quotaBlock}
+          {autoInfo}
         </Box>
         {/* Không có gì bên dưới, hoặc đang hiện bản handoff: nút xếp một hàng ngang sát phải để bản handoff
             chiếm trọn bề ngang. Có gợi ý hoặc thẻ YSK: nút xếp cột dọc bên phải. */}

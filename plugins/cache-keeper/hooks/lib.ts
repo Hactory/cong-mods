@@ -376,3 +376,30 @@ export function autoCompactHint(isOn: boolean): string {
     ? 'Đã BẬT tự nén cho phiên này khi cache còn 5 phút: lúc Claude rảnh, context từ 50k, cache sắp nguội thì tự chạy /compact để lần chat sau đọc lại bản gọn, đỡ tốn quota. Đã nén rồi thì chờ có lượt chat mới mới nén lại. Phiên mở sau cũng bật theo.'
     : 'Đã TẮT tự nén cho phiên này. Cache sắp nguội chỉ nhắc, không tự /compact. Phiên mở sau cũng tắt theo. Bấm dấu tích để bật lại.'
 }
+
+/** Chữ hiện khi trỏ chuột vào ⓘ ở hàng cache: mô tả dấu tích tự nén cạnh nút Nén. */
+export function autoCompactInfo(isOn: boolean): string {
+  return (
+    `Tự nén khi cache còn 5 phút: đang ${isOn ? 'BẬT' : 'TẮT'} ở phiên này. ` +
+    'Bật/tắt bằng dấu tích ☑ cạnh nút Nén dưới ô nhập. ' +
+    'Khi bật: cache sắp nguội, Claude đang rảnh và context từ 50k thì mod tự chạy /compact, ' +
+    'để lần chat sau đọc lại bản gọn thay vì cả cuộc chat, đỡ tốn quota. ' +
+    'Đã nén rồi mà chưa chat thêm thì không nén lại. ' +
+    'Mỗi phiên giữ lựa chọn riêng; phiên mở sau theo lần bật/tắt cuối cùng.'
+  )
+}
+
+const xmlEsc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+/** Biểu tượng ⓘ có <title> để hiện mô tả khi trỏ chuột (cần Svg isInteractive). Xanh khi bật, xám khi tắt. */
+export function infoSvg(isOn: boolean, text: string): string {
+  const c = isOn ? '#22c55e' : '#9ca3af'
+  return (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" style="cursor:help">' +
+    `<title>${xmlEsc(text)}</title>` +
+    `<circle cx="8" cy="8" r="6.6" fill="none" stroke="${c}" stroke-width="1.4"/>` +
+    `<circle cx="8" cy="5" r="0.9" fill="${c}"/>` +
+    `<path d="M8 7.2v4.3" stroke="${c}" stroke-width="1.5" stroke-linecap="round"/>` +
+    '</svg>'
+  )
+}

@@ -100,3 +100,35 @@ test('phiên mới theo lần bật/tắt cuối; reload không đè lựa chọ
   expect((await ui.find({ key: 'auto-compact' }))?.props.label).toBe('☑')
   await ui.unmount()
 })
+
+test('ⓘ ở hàng cache (desktop) hiện mô tả tự nén khi trỏ chuột, đổi theo bật/tắt', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  await $.session.measure({ ...MEASURE, rateLimits: [], changed: [...MEASURE.changed] })
+  const BAND = {
+    component: 'AbovePrompt' as const,
+    props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 140, scroll: { offset: 0, bodyRows: 12 }, view: {} },
+  }
+
+  const band = await $.ui.mount({ plugin: 'cache-keeper', surface: 'desktop', ...BAND })
+  const findInfo = async (ui: typeof band) =>
+    (await ui.findAll({ type: 'Svg' })).find(x => /^Tự nén khi cache/.test(String(x.props.alt)))
+  const info = await findInfo(band)
+  expect(info?.props.isInteractive).toBe(true)
+  expect(String(info?.props.source)).toContain('<title>Tự nén khi cache còn 5 phút: đang BẬT')
+  expect(String(info?.props.source)).toContain('#22c55e')
+
+  const mode = await $.ui.mount({ plugin: 'cache-keeper', surface: 'desktop', ...MODE })
+  await mode.press({ key: 'auto-compact' })
+  await mode.unmount()
+  const after = await findInfo(band)
+  expect(String(after?.props.source)).toContain('đang TẮT')
+  expect(String(after?.props.source)).toContain('#9ca3af')
+  await band.unmount()
+
+  const t = await $.ui.mount({ plugin: 'cache-keeper', surface: 'terminal', ...BAND })
+  expect(await t.find({ type: 'Text', text: /Tự nén khi cache/ })).toBeUndefined()
+  await t.unmount()
+})
